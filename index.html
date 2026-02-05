@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>USB Video Preview</title>
+<style>
+html, body {
+  margin:0; width:100vw; height:100vh;
+  font-family: system-ui, "Segoe UI", sans-serif;
+  background:#f3f3f3; overflow:hidden;
+}
+header {
+  position:fixed; top:0; left:0; width:100%; height:30px;
+  display:flex; align-items:center; gap:10px; padding:8px 4px;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.2), rgba(255,255,255,0.1));
+  backdrop-filter: blur(20px) saturate(160%);
+  border-bottom:1px solid rgba(0,0,0,0.08);
+  box-shadow:0 1px 10px rgba(0,0,0,0.12); z-index:10;
+  transition: transform 0.3s ease;
+}
+header.hidden {
+  transform: translateY(-100%);
+}
+button.cmd-btn {
+  height:32px; padding:0 12px; border-radius:6px;
+  border:1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.65); cursor:pointer;
+}
+button.cmd-btn:hover { background: rgba(255,255,255,0.85); }
+#info { margin-left:auto; margin-right: 50px; font-size:12px; color:#3a3a3a; opacity:0.9; }
+#videoWrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: gray;
+  height: 100svh;
+  width: 100svw;
+  overflow: hidden;
+  cursor: none;
+}
+body.header-visible #videoWrap {
+  cursor: default;
+}
+
+video {
+  max-height: 100%;
+  max-width: 100%;
+  aspect-ratio: 16/9;
+  object-fit: contain;
+  background: black;
+}
+
+.flyout {
+  position:fixed; top:64px; left:12px; width:220px;
+  background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.75));
+  backdrop-filter: blur(24px) saturate(160%);
+  border-radius:10px; border:1px solid rgba(0,0,0,0.12); padding:6px;
+  display:none; z-index:20;
+}
+.flyout.open { display:block; }
+.device { padding:10px 12px; border-radius:6px; font-size:13px; cursor:pointer; }
+.device:hover { background: rgba(0,0,0,0.05); }
+.device.active { background:#e5f0ff; outline:1px solid #3b82f6; }
+</style>
+</head>
+<body>
+
+<header>
+  <button id="videoBtn" class="cmd-btn">Select Video</button>
+  <button id="audioBtn" class="cmd-btn">Select Audio</button>
+  <button id="startBtn" class="cmd-btn">Start</button>
+  <div id="info">Idle</div>
+</header>
+
+<div id="videoWrap">
+  <video id="video" autoplay playsinline></video>
+</div>
+
+<div id="videoFlyout" class="flyout"></div>
+<div id="audioFlyout" class="flyout"></div>
+
+<script>
+const video = document.getElementById("video");
+const videoFlyout = document.getElementById("videoFlyout");
+const audioFlyout = document.getElementById("audioFlyout");
+const videoBtn = document.getElementById("videoBtn");
+const audioBtn = document.getElementById("audioBtn");
+const startBtn = document.getElementById("startBtn");
+const info = document.getElementById("info");
+const header = document.querySelector('header');
+const body = document.body;
+
+let videoDeviceId = null;
+let audioDeviceId = null;
+let currentStream;
+let hideTimeout;
+let isHovering = false;
+
+function initAutoHide() {
+  showHeader();
+  startHideTimer();
+  document.addEventListener('mousemove', handleMouseMove);
+  
+  [videoBtn, audioBtn, startBtn, videoFlyout, audioFlyout].forEach(element => {
+    if (element) {
+      element.addEventListener('mouseenter', () => {
+        isHovering = true;
+        showHeader();
+      });
+      element.addEventListener('mouseleave', () => {
+        isHovering = false;
+        startHideTimer();
+      });
+    }
+  });
+}
+
+function handleMouseMove(e) {
+  if (e.clientY < 100) {
+    showHeader();
+    clearTimeout(hideTimeout);
+    return;
+  }
+  
+  if (!header.classList.contains('hidden') && !isHovering) {
+    clearTimeout(hideTimeout);
+    startHideTimer();
+  }
+}
+
+function showHeader() {
+  clearTimeout(hideTimeout);
+  header.classList.remove('hidden');
+  body.classList.add('header-visible');
+  
+  hideTimeout = setTimeout(() => {
+    if (!isHovering) {
+      hideHeader();
+    }
+  }, 10000);
+}
+
+function hideHeader() {
+  clearTimeout(hideTimeout);
+  header.classList.add('hidden');
+  body.classList.remove('header-visible');
+}
+
+function startHideTimer() {
+  clearTimeout(hideTimeout);
+  if (!header.classList.contains('hidden') && !isHovering) {
+    hideTimeout = setTimeout(() => {
+      if (!isHovering) {
+        hideHeader();
+      }
+    }, 10000);
+  }
+}
+
+async function initDevices() {
+  const temp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+  temp.getTracks().forEach(t => t.stop());
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  buildFlyout(devices.filter(d => d.kind === "videoinput"), videoFlyout, id => { 
+    videoDeviceId = id; 
+    videoBtn.textContent = "Video selected"; 
+  });
+  buildFlyout(devices.filter(d => d.kind === "audioinput"), audioFlyout, id => { 
+    audioDeviceId = id; 
+    audioBtn.textContent = "Audio selected"; 
+  });
+}
+
+function buildFlyout(items, flyout, onSelect) {
+  flyout.innerHTML = "";
+  items.forEach(i => {
+    const div = document.createElement("div");
+    div.className = "device";
+    div.textContent = i.label || i.label;
+    div.onclick = () => {
+      [...flyout.children].forEach(c => c.classList.remove("active"));
+      div.classList.add("active");
+      onSelect(i.deviceId || i);
+      flyout.classList.remove("open");
+      showHeader();
+    };
+    flyout.appendChild(div);
+  });
+}
+
+async function startCapture() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+  }
+
+  const constraints = {
+    video: {
+      width: { exact: 1920 },
+      height: { exact: 1080 },
+      frameRate: { exact: 30 },
+      deviceId: videoDeviceId ? { exact: videoDeviceId } : undefined
+    },
+    audio: {
+      deviceId: audioDeviceId ? { exact: audioDeviceId } : undefined,
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    }
+  };
+
+  currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+  video.srcObject = currentStream;
+  video.muted = false;
+  video.volume = 1.0;
+  await video.play();
+  info.textContent = "1080p 30fps";
+  showHeader();
+}
+
+videoBtn.onclick = () => { 
+  videoFlyout.classList.toggle("open"); 
+  audioFlyout.classList.remove("open"); 
+  showHeader();
+};
+audioBtn.onclick = () => { 
+  audioFlyout.classList.toggle("open"); 
+  videoFlyout.classList.remove("open"); 
+  showHeader();
+};
+startBtn.onclick = startCapture;
+
+initDevices();
+initAutoHide();
+</script>
+
+</body>
+</html>
